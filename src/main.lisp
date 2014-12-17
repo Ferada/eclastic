@@ -111,7 +111,11 @@
    (source :initarg :source
            :accessor document-source)
    (version :initarg :version
-            :accessor version)))
+            :accessor version)
+   (parent :initarg :parent
+           :accessor parent)
+   (fields :initarg :fields
+           :accessor fields)))
 
 (defmethod print-object ((obj <document>) stream)
    (print-unreadable-object (obj stream :type t :identity t)
@@ -120,15 +124,23 @@
              (type-name obj)
              (document-id obj))))
 
+(defun pophash (key hash-table &optional default)
+  (prog1 (gethash key hash-table default)
+    (remhash key hash-table)))
+
 (defun hash-to-document (hash-table &key host port)
-  (make-instance '<document>
-                 :index (gethash "_index" hash-table)
-                 :type (gethash "_type" hash-table)
-                 :id (gethash "_id" hash-table)
-                 :version (gethash "_version" hash-table)
-                 :source (gethash "_source" hash-table)
-                 :host host
-                 :port port))
+  (let ((fields (gethash "fields" hash-table)))
+    (make-instance '<document>
+                   :index (gethash "_index" hash-table)
+                   :type (gethash "_type" hash-table)
+                   :id (gethash "_id" hash-table)
+                   :version (gethash "_version" hash-table)
+                   :source (or (and fields (car (pophash "_source" fields)))
+                               (gethash "_source" hash-table))
+                   :parent (and fields (pophash "_parent" fields))
+                   :fields fields
+                   :host host
+                   :port port)))
 
 (defclass <search> ()
   ((query :initarg :query
@@ -139,6 +151,10 @@
          :reader from)
    (size :initarg :size
          :reader size)
+   (fields :initarg :fields
+           :reader fields)
+   (partial-fields :initarg :partial-fields
+                   :reader partial-fields)
    (search-type :initarg :search-type)
    (query-cache :initarg :query-cache)
    (terminate-after :initarg :terminate-after
@@ -157,14 +173,16 @@
             (list (cons "query_cache" it))))))
 
 (defun new-search (query &key aggregations timeout
-                           from size search-type
-                           query-cache terminate-after
-                           suggestions)
+                           from size fields partial-fields
+                           search-type query-cache
+                           terminate-after suggestions)
   (make-instance '<search>
                  :query query
                  :timeout timeout
                  :from from
                  :size size
+                 :fields (when fields)
+                 :partial-fields partial-fields
                  :search-type (when search-type
                                 (ecase search-type
                                   (:dfs-query-then-fetch
@@ -203,7 +221,9 @@
     (with-object ()
       (loop for pair in (suggestions this) do
            (with-object-element ((car pair))
-             (encode-object (cdr pair)))))))
+             (encode-object (cdr pair))))))
+  (encode-object-element* "fields" (fields this))
+  (encode-object-element* "partial_fields" (partial-fields this)))
 
 (defmethod get* ((place <server>) (query <search>))
   (let* ((result
